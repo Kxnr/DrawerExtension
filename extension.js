@@ -16,7 +16,7 @@ let center = null; //TODO: how to deal with this changing?
 // TODO: event listeners for window being removed from drawer by mouse 
 
 // would be better to disable click and drag
-// need to check if window exist
+// need to check if window exists
 
 var _log = function () { }
 if (debug)
@@ -106,13 +106,13 @@ function placeWindow(loc, app) {
     _log("window.x: " + window.x + " window.y: " + window.y + " window.width: " + window.width + " window.height: " + window.height)
 }
 
-
 function fillDrawer(direction, app) {
     if (direction == "left") {
         if (leftOpen) {
             toggleDrawer("left");
         }
         leftWindow = app;
+        leftOpen = true;
         toggleDrawer("left");
     }
     else if (direction == "right") {
@@ -120,6 +120,7 @@ function fillDrawer(direction, app) {
             toggleDrawer("right");
         }
         rightWindow = app;
+        rightOpen = true;
         toggleDrawer("right");
     }
 }
@@ -129,10 +130,12 @@ function toggleDrawer(direction) {
 
         if (leftOpen) {
             leftWindow.minimize();
+            leftOpen = false;
         }
         else {
             if (leftDrawer != null) {
                 placeWindow("left", leftWindow);
+                leftOpen = true;
             }
         }
 
@@ -140,16 +143,14 @@ function toggleDrawer(direction) {
     else if (direction == "right") {
         if (rightOpen) {
             rightWindow.minimize();
+            rightOpen = false;
         }
         else {
             if (rightDrawer != null) {
                 placeWindow("right", rightWindow);
+                rightOpen = true;
             }
         }
-    }
-    if (center != null) {
-        placeWindow("center", center);
-        center = null;
     }
 }
 
@@ -175,10 +176,19 @@ function moveWindow(action) {
     _log("moveWindow: " + direction);
     var app = global.display.focus_window;
     var space = app.get_work_area_current_monitor();
-    var maximized = (app.maximizedVertically && app.maximized_horizontally);
+
+    // TODO //
+    // maximizing center window is non-trivial, need 
+    // a better way to decide what/when to maximize
+
 
     // store center if neither drawer is open, focus is maximized, focus isn't drawer window
     // and opening drawer
+    if (!(leftOpen || rightOpen) && app.maximizedVertically) {
+        if ((app != leftWindow) && (app != rightWindow)) {
+            center = app;
+        }
+    }
 
     // check if center and sides are still open, else reset those states
 
@@ -192,9 +202,17 @@ function moveWindow(action) {
             break;
         case "toggleLeft":
             toggleDrawer("left");
+            if (center != null) {
+                placeWindow("center", center);
+            }
+            center = null;
             break;
         case "toggleRight":
             toggleDrawer("right");
+            if (center != null) {
+                placeWindow("center", center);
+            }
+            center = null;
             break;
         case "emptyLeft":
             emptyDrawer("left");
@@ -205,9 +223,9 @@ function moveWindow(action) {
     }
 }
 
-function requestMove(direction) {
+function requestMove(action) {
     Mainloop.timeout_add(10, function () {
-        moveWindow(direction);
+        moveWindow(action);
     });
 }
 
@@ -234,17 +252,11 @@ var enable = function () {
         let desktopSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
         let mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter.keybindings' });
 
-        // TODO // set drawer keybindings
-        changeBinding(desktopSettings, 'unmaximize', '<Super>Down', '<Control><Shift><Super>Down');
-        changeBinding(desktopSettings, 'maximize', '<Super>Up', '<Control><Shift><Super>Up');
-        changeBinding(mutterSettings, 'toggle-tiled-left', '<Super>Left', '<Control><Shift><Super>Left');
-        changeBinding(mutterSettings, 'toggle-tiled-right', '<Super>Right', '<Control><Shift><Super>Right');
         Mainloop.timeout_add(3000, function () {
-            // TODO // key handling logic
-            keyManager.add("<Super>left", function () { requestMove("left") })
-            keyManager.add("<Super>right", function () { requestMove("right") })
-            keyManager.add("<Super>up", function () { requestMove("up") })
-            keyManager.add("<Super>down", function () { requestMove("down") })
+            keyManager.add("<Ctrl><Alt>left", function () { requestMove("toggleLeft"); })
+            keyManager.add("<Ctrl><Alt>right", function () { requestMove("toggleRight"); })
+            keyManager.add("<Shift><Ctrl><Alt>left", function () { leftWindow ? requestMove("emptyLeft") : requestMove("fillLeft"); })
+            keyManager.add("<Shift><Ctrl><Alt>right", function () { rightWindow ? requestMove("emptyRight") : requestMove("fillRight"); })
         });
     }
 }
@@ -254,11 +266,5 @@ var disable = function () {
         keyManager.removeAll();
         keyManager.destroy();
         keyManager = null;
-        let desktopSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
-        let mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter.keybindings' });
-        resetBinding(desktopSettings, 'unmaximize');
-        resetBinding(desktopSettings, 'maximize');
-        resetBinding(mutterSettings, 'toggle-tiled-left');
-        resetBinding(mutterSettings, 'toggle-tiled-right');
     }
 }

@@ -1,0 +1,9 @@
+{
+    "uuid": "Drawers@myname.example.com",
+    "name": "WorkspaceDrawers",
+    "description": "Add workspace drawers to ",
+    "url": "http://example.com/~myname/myextension",
+    "shell-version": [
+        "3.2.2"
+    ]
+}
