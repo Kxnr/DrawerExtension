@@ -3,8 +3,7 @@ const Main = imports.ui.main
 const Mainloop = imports.mainloop;
 const Gio = imports.gi.Gio;
 
-let _close = 50;
-var debug = false;
+var debug = true;
 
 let rightOpen = false;
 let leftOpen = false;
@@ -14,41 +13,93 @@ let center = null; //TODO: how to deal with this changing?
 
 // TODO: event listeners for windows closing
 // TODO: event listeners for window being removed from drawer by mouse 
+// TODO: store windows by worksapce, make this work with multiple desktops
 
-// would be better to disable click and drag
-// need to check if window exists
+const Lang = imports.lang
+const Shell = imports.gi.Shell
+
+var KeyManager = new Lang.Class({
+    Name: 'MyKeyManager',
+
+    _init: function () {
+        this.grabbers = new Map()
+
+        global.display.connect(
+            'accelerator-activated',
+            Lang.bind(this, function (display, action, deviceId, timestamp) {
+                log('Accelerator Activated: [display={}, action={}, deviceId={}, timestamp={}]',
+                    display, action, deviceId, timestamp)
+                this._onAccelerator(action)
+            }))
+    },
+
+    listenFor: function (accelerator, callback) {
+        log('Trying to listen for hot key [accelerator={}]', accelerator)
+        let action = global.display.grab_accelerator(accelerator)
+
+        if (action == Meta.KeyBindingAction.NONE) {
+            log('Unable to grab accelerator [binding={}]', accelerator)
+        } else {
+            log('Grabbed accelerator [action={}]', action)
+            let name = Meta.external_binding_name_for_action(action)
+            log('Received binding name for action [name={}, action={}]',
+                name, action)
+
+            log('Requesting WM to allow binding [name={}]', name)
+            Main.wm.allowKeybinding(name, Shell.ActionMode.ALL)
+
+            this.grabbers.set(action, {
+                name: name,
+                accelerator: accelerator,
+                callback: callback,
+                action: action
+            })
+        }
+
+    },
+
+    _onAccelerator: function (action) {
+        let grabber = this.grabbers.get(action)
+
+        if (grabber) {
+            this.grabbers.get(action).callback()
+        } else {
+            log('No listeners [action={}]', action)
+        }
+    }
+})
 
 var _log = function () { }
 if (debug)
     _log = log.bind(window.console);
 
+const Config = imports.misc.config;
 window.gsconnect = {
     extdatadir: imports.misc.extensionUtils.getCurrentExtension().path,
     shell_version: parseInt(Config.PACKAGE_VERSION.split('.')[1], 10)
 };
 imports.searchPath.unshift(gsconnect.extdatadir);
 
-const KeyBindings = imports.keybindings
 let keyManager = null;
-var oldbindings = {
-    // TODO // create lists for existing bindings (shouldn't be any)
-}
 
-function isClose(a, b) {
-    if (a <= b && a > b - _close)
-        return true;
-    else if (a >= b && a < b + _close)
-        return true;
-    else
+function checkOpen(window) {
+    if (window == null) {
         return false;
+    }
+    let windows = global.screen.get_active_workspace().list_windows();
+    for (let it of windows) {
+        if (it == window) {
+            return true;
+        }
+    }
+    return false;
 }
-
 function placeWindow(loc, app) {
     _log("placeWindow: " + loc);
     let x, y, w, h = 0
     var space = app.get_work_area_current_monitor()
-    let w = Math.floor(space.width / 3);
-    let h = space.height;
+    w = Math.floor(2 * space.width / 5);
+    h = space.height;
     switch (loc) {
         case "left":
             x = space.x;
@@ -72,45 +123,46 @@ function placeWindow(loc, app) {
             app.move_resize_frame(true, x, y, w, h)
             break;
         case "center":
-            if (!app.maximizedVertically) {
-                app.maximize(Meta.MaximizeFlags.VERTICAL);
-            }
-            if (app.maximized_horizontally)
-                app.unmaximize(Meta.MaximizeFlags.HORIZONTAL);
+            if (rightOpen) {
+                if (!app.maximizedVertically) {
+                    app.maximize(Meta.MaximizeFlags.VERTICAL);
+                }
+                if (app.maximized_horizontally)
+                    app.unmaximize(Meta.MaximizeFlags.HORIZONTAL);
 
-            if (rightOpen && leftOpen) {
-                x = space.x + w;
-                y = space.y;
-                app.move_resize_frame(true, x, y, w, h);
-            }
-            else if (rightOpen) {
                 x = space.x;
                 y = space.y;
-                app.move_resize_frame(true, x, y, 2 * w, h);
+                app.move_resize_frame(true, x, y, Math.floor((3 / 2) * w), h);
 
             }
             else if (leftOpen) {
+                if (!app.maximizedVertically) {
+                    app.maximize(Meta.MaximizeFlags.VERTICAL);
+                }
+                if (app.maximized_horizontally)
+                    app.unmaximize(Meta.MaximizeFlags.HORIZONTAL);
                 x = space.x + w;
                 y = space.y;
-                app.move_resize_frame(true, x, y, 2 * w, h);
+                app.move_resize_frame(true, x, y, Math.floor((3 / 2) * w), h);
             }
             else {
-                app.maximize(Meta.MaximizeFlags.VERICAL | Meta.MaximizeFlags.HORIZONTAL)
+                if (app.maximizedVertically) {
+                    app.maximize(Meta.MaximizeFlags.VERICAL | Meta.MaximizeFlags.HORIZONTAL)
+                    center = null;
+                }
             }
+            break;
         case "floating":
             if (app.maximized_horizontally || app.maximizedVertically)
                 app.unmaximize(Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL);
             break;
     }
     let window = app.get_frame_rect()
-    _log("window.x: " + window.x + " window.y: " + window.y + " window.width: " + window.width + " window.height: " + window.height)
+    _log(loc + " window.x: " + window.x + " window.y: " + window.y + " window.width: " + window.width + " window.height: " + window.height)
 }
 
 function fillDrawer(direction, app) {
     if (direction == "left") {
-        if (leftOpen) {
-            toggleDrawer("left");
-        }
         leftWindow = app;
         leftOpen = true;
         toggleDrawer("left");
@@ -127,13 +179,18 @@ function fillDrawer(direction, app) {
 
 function toggleDrawer(direction) {
     if (direction == "left") {
-
         if (leftOpen) {
             leftWindow.minimize();
             leftOpen = false;
         }
         else {
-            if (leftDrawer != null) {
+            if (rightOpen) {
+                toggleDrawer("right")
+            }
+            if (leftWindow != null) {
+                if (leftWindow.minimized) {
+                    leftWindow.unminimize();
+                }
                 placeWindow("left", leftWindow);
                 leftOpen = true;
             }
@@ -141,12 +198,19 @@ function toggleDrawer(direction) {
 
     }
     else if (direction == "right") {
+
         if (rightOpen) {
             rightWindow.minimize();
             rightOpen = false;
         }
         else {
-            if (rightDrawer != null) {
+            if (leftOpen) {
+                toggleDrawer("left")
+            }
+            if (rightWindow != null) {
+                if (rightWindow.minimized) {
+                    rightWindow.unminimize();
+                }
                 placeWindow("right", rightWindow);
                 rightOpen = true;
             }
@@ -173,9 +237,8 @@ function emptyDrawer(direction) {
 
 function moveWindow(action) {
     // TODO // needs to save center
-    _log("moveWindow: " + direction);
+    _log("moveWindow: " + action);
     var app = global.display.focus_window;
-    var space = app.get_work_area_current_monitor();
 
     // TODO //
     // maximizing center window is non-trivial, need 
@@ -184,35 +247,49 @@ function moveWindow(action) {
 
     // store center if neither drawer is open, focus is maximized, focus isn't drawer window
     // and opening drawer
-    if (!(leftOpen || rightOpen) && app.maximizedVertically) {
-        if ((app != leftWindow) && (app != rightWindow)) {
-            center = app;
+    if (app != null) {
+        if (!(leftOpen || rightOpen) && app.maximizedVertically) {
+            if ((app != leftWindow) && (app != rightWindow)) {
+                if (!action.includes("fill"))
+                    center = app;
+            }
         }
     }
 
     // check if center and sides are still open, else reset those states
+    if (!checkOpen(center)) {
+        center = null;
+    }
+    if (!checkOpen(leftWindow)) {
+        leftOpen = false;
+        leftWindow = null;
+    }
+    if (!checkOpen(rightWindow)) {
+        rightOpen = false;
+        rightWindow = null;
+    }
 
     // main logic for drawers
     switch (action) {
         case "fillLeft":
-            fillDrawer("left", app);
+            if (app != null)
+                fillDrawer("left", app);
             break;
         case "fillRight":
-            fillDrawer("right", app);
+            if (app != null)
+                fillDrawer("right", app);
             break;
         case "toggleLeft":
             toggleDrawer("left");
             if (center != null) {
                 placeWindow("center", center);
             }
-            center = null;
             break;
         case "toggleRight":
             toggleDrawer("right");
             if (center != null) {
                 placeWindow("center", center);
             }
-            center = null;
             break;
         case "emptyLeft":
             emptyDrawer("left");
@@ -224,47 +301,32 @@ function moveWindow(action) {
 }
 
 function requestMove(action) {
+    _log("DRAWERS: attempting action");
+    _log(action);
     Mainloop.timeout_add(10, function () {
         moveWindow(action);
     });
 }
 
-function changeBinding(settings, key, oldBinding, newBinding) {
-    var binding = oldbindings[key.replace(/-/g, '_')];
-    var _newbindings = [];
-    for (var i = 0; i < binding.length; i++) {
-        let currentbinding = binding[i];
-        if (currentbinding == oldBinding)
-            currentbinding = newBinding;
-        _newbindings.push(currentbinding)
-    }
-    settings.set_strv(key, _newbindings);
-}
-
-function resetBinding(settings, key) {
-    var binding = oldbindings[key.replace(/-/g, '_')];
-    settings.set_strv(key, binding);
-}
-
 var enable = function () {
     if (!keyManager) {
-        keyManager = new KeyBindings.Manager();
-        let desktopSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.wm.keybindings' });
-        let mutterSettings = new Gio.Settings({ schema_id: 'org.gnome.mutter.keybindings' });
-
+        keyManager = new KeyManager();
+        _log("DRAWERS: creating binds");
         Mainloop.timeout_add(3000, function () {
-            keyManager.add("<Ctrl><Alt>left", function () { requestMove("toggleLeft"); })
-            keyManager.add("<Ctrl><Alt>right", function () { requestMove("toggleRight"); })
-            keyManager.add("<Shift><Ctrl><Alt>left", function () { leftWindow ? requestMove("emptyLeft") : requestMove("fillLeft"); })
-            keyManager.add("<Shift><Ctrl><Alt>right", function () { rightWindow ? requestMove("emptyRight") : requestMove("fillRight"); })
+            keyManager.listenFor("<ctrl><super>left", function () { requestMove("toggleLeft"); })
+            keyManager.listenFor("<ctrl><super>right", function () { requestMove("toggleRight"); })
+            keyManager.listenFor("<super><ctrl><alt>left", function () { leftWindow ? requestMove("emptyLeft") : requestMove("fillLeft"); })
+            keyManager.listenFor("<super><ctrl><alt>right", function () { rightWindow ? requestMove("emptyRight") : requestMove("fillRight"); })
         });
     }
 }
 
 var disable = function () {
+    _log("DRAWERS: destroying binds");
     if (keyManager) {
-        keyManager.removeAll();
-        keyManager.destroy();
-        keyManager = null;
+        for (let it of keyManager.grabbers) {
+            global.display.ungrab_accelerator(it[1].action)
+            Main.wm.allowKeybinding(it[1].name, Shell.ActionMode.NONE)
+        }
     }
 }
