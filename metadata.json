@@ -1,8 +1,8 @@
 {
-    "uuid": "Drawers@example.com",
+    "uuid": "drawer-extension@kxnr.me",
     "name": "Drawers",
     "description": "Add workspace drawers",
-    "url": "example.com",
+    "url": "github.com/kxnr/Drawer Extenions",
     "shell-version": [
         "3.2.2"
     ]
